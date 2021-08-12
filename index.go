@@ -3,12 +3,22 @@ package main
 import (
 	"crypto/sha1"
 	"fmt"
+	bencode2 "github.com/jackpal/bencode-go"
 	"github.com/zeebo/bencode"
 	"io"
 	"io/ioutil"
+	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
+
+type bencodeTrackerResp struct {
+	Interval int    `bencode:"interval"`
+	Peers    string `bencode:"peers"`
+}
 
 type fileInfo struct {
 	length int64
@@ -21,7 +31,7 @@ type info struct {
 	filesInfo []fileInfo
 }
 
-type torrentInfo struct {
+type TorrentInfo struct {
 	announce string
 	info     info
 	infoHash []byte
@@ -33,7 +43,26 @@ const (
 	connType = "udp"
 )
 
-func ParseTorrentFile(fileName string) (*torrentInfo, error) {
+func (torrent *TorrentInfo) buildTrackerUrl(id []byte, port uint16) (string, error) {
+	base, err := url.Parse(torrent.announce)
+	if err != nil {
+		fmt.Println("error in parsing tracker url")
+		return "", err
+	}
+	params := url.Values{
+		"info_hash":  []string{string(torrent.infoHash[:])},
+		"peer_id":    []string{string(id[:])},
+		"port":       []string{strconv.Itoa(int(port))},
+		"uploaded":   []string{"0"},
+		"downloaded": []string{"0"},
+		"compact":    []string{"1"},
+		"left":       []string{strconv.Itoa(int(torrent.info.length))},
+	}
+	base.RawQuery = params.Encode()
+	return base.String(), nil
+}
+
+func ParseTorrentFile(fileName string) (*TorrentInfo, error) {
 	torrent, err := ioutil.ReadFile(fileName)
 	if err != nil {
 		fmt.Println("Invalid name of file")
@@ -46,7 +75,7 @@ func ParseTorrentFile(fileName string) (*torrentInfo, error) {
 		return nil, err
 	}
 
-	var torrentInfo torrentInfo
+	var torrentInfo TorrentInfo
 	torrentInfo.announce = decode["announce"].(string)
 
 	infoMap := decode["info"].(map[string]interface{})
@@ -88,11 +117,24 @@ func infoHash(decodedInfoMap interface{}) ([]byte, error) {
 
 func main() {
 
-	file, err := ParseTorrentFile("puppy.torrent")
+	file, err := ParseTorrentFile("ubuntu20.04.torrent")
 	if err != nil {
 		fmt.Println("error in parsing")
 		return
 	}
-	fmt.Println(file)
+	trackerUrl, err := file.buildTrackerUrl(file.infoHash, 8080)
+	if err != nil {
+		return
+	}
+	c := &http.Client{Timeout: 15 * time.Second}
+	get, err := c.Get(trackerUrl)
+	defer get.Body.Close()
+	if err != nil {
+		return
+	}
+	trackerResp := bencodeTrackerResp{}
+	bencode2.Unmarshal(get.Body, &trackerResp)
+
+	fmt.Println(get.StatusCode)
 
 }
