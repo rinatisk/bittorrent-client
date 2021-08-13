@@ -2,11 +2,13 @@ package main
 
 import (
 	"crypto/sha1"
+	"encoding/binary"
 	"fmt"
 	bencode2 "github.com/jackpal/bencode-go"
 	"github.com/zeebo/bencode"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +16,11 @@ import (
 	"strings"
 	"time"
 )
+
+type peer struct {
+	port uint16
+	IP   net.IP
+}
 
 type bencodeTrackerResp struct {
 	Interval int    `bencode:"interval"`
@@ -134,6 +141,19 @@ func (torrent *TorrentInfo) getTrackerResp() (bencodeTrackerResp, error) {
 	return trackerResp, nil
 }
 
+func parsePeers(bytes []byte) []peer {
+	const numberPeerBytes = 6
+	var peers []peer
+	for i := 0; i < len(bytes); i += numberPeerBytes {
+		p := peer{
+			port: binary.BigEndian.Uint16(bytes[i+4 : i+6]),
+			IP:   bytes[i : i+4],
+		}
+		peers = append(peers, p)
+	}
+	return peers
+}
+
 func main() {
 
 	torrent, err := ParseTorrentFile("ubuntu20.04.torrent")
@@ -146,6 +166,8 @@ func main() {
 		fmt.Println("Error with get tracker resp")
 		return
 	}
-	fmt.Println(tracker.Peers)
+	//fmt.Println([]byte(tracker.Peers))
+	peers := parsePeers([]byte(tracker.Peers))
+	fmt.Println(peers)
 
 }
