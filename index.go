@@ -39,7 +39,7 @@ type TorrentInfo struct {
 
 const (
 	connHost = "localHost"
-	connPort = "8080"
+	connPort = "6969"
 	connType = "udp"
 )
 
@@ -115,26 +115,37 @@ func infoHash(decodedInfoMap interface{}) ([]byte, error) {
 	return hash.Sum(nil), nil
 }
 
-func main() {
-
-	file, err := ParseTorrentFile("ubuntu20.04.torrent")
+func (torrent *TorrentInfo) getTrackerResp() (bencodeTrackerResp, error) {
+	trackerUrl, err := torrent.buildTrackerUrl(torrent.infoHash, 6969)
 	if err != nil {
-		fmt.Println("error in parsing")
-		return
-	}
-	trackerUrl, err := file.buildTrackerUrl(file.infoHash, 8080)
-	if err != nil {
-		return
+		return bencodeTrackerResp{}, err
 	}
 	c := &http.Client{Timeout: 15 * time.Second}
 	get, err := c.Get(trackerUrl)
 	defer get.Body.Close()
 	if err != nil {
-		return
+		return bencodeTrackerResp{}, err
 	}
 	trackerResp := bencodeTrackerResp{}
-	bencode2.Unmarshal(get.Body, &trackerResp)
+	err = bencode2.Unmarshal(get.Body, &trackerResp)
+	if err != nil {
+		return bencodeTrackerResp{}, err
+	}
+	return trackerResp, nil
+}
 
-	fmt.Println(get.StatusCode)
+func main() {
+
+	torrent, err := ParseTorrentFile("ubuntu20.04.torrent")
+	if err != nil {
+		fmt.Println("Error with parsing torrent file")
+		return
+	}
+	tracker, err := torrent.getTrackerResp()
+	if err != nil {
+		fmt.Println("Error with get tracker resp")
+		return
+	}
+	fmt.Println(tracker.Peers)
 
 }
