@@ -4,7 +4,6 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
-	bencode2 "github.com/jackpal/bencode-go"
 	"github.com/zeebo/bencode"
 	"io"
 	"io/ioutil"
@@ -17,14 +16,67 @@ import (
 	"time"
 )
 
+type handshake struct {
+	pstr     string
+	infoHash []byte
+	peerId   []byte
+}
+
 type peer struct {
 	port uint16
 	IP   net.IP
 }
 
+func (p peer) String() string {
+	return p.IP.String() + ":" + strconv.Itoa(int(p.port))
+}
+
 type bencodeTrackerResp struct {
-	Interval int    `bencode:"interval"`
-	Peers    string `bencode:"peers"`
+	WarningMessage string
+	Interval       int64
+	MinInterval    int64
+	TrackerId      string
+	Complete       int64
+	Incomplete     int64
+	Peers          []peer
+}
+
+func parseTrackerResp(bytes []byte) (bencodeTrackerResp, error) {
+	var resp map[string]interface{}
+	err := bencode.DecodeBytes(bytes, &resp)
+	if err != nil {
+		return bencodeTrackerResp{}, fmt.Errorf("oh shit man u broke decoder: %v", err)
+	}
+
+	var trackerResp bencodeTrackerResp
+
+	if interval, ok := resp["interval"].(int64); ok {
+		trackerResp.Interval = interval
+	}
+
+	if id, ok := resp["tracker id"].(string); ok {
+		trackerResp.TrackerId = id
+	}
+
+	if warning, ok := resp["warning message"].(string); ok {
+		trackerResp.WarningMessage = warning
+	}
+
+	if complete, ok := resp["complete"].(int64); ok {
+		trackerResp.Complete = complete
+	}
+
+	if incomplete, ok := resp["incomplete"].(int64); ok {
+		trackerResp.Incomplete = incomplete
+	}
+
+	if minInterval, ok := resp["min interval"].(int64); ok {
+		trackerResp.MinInterval = minInterval
+	}
+	peers := resp["peers"].(string)
+	trackerResp.Peers = parsePeers(peers)
+
+	return trackerResp, nil
 }
 
 type fileInfo struct {
@@ -133,15 +185,19 @@ func (torrent *TorrentInfo) getTrackerResp() (bencodeTrackerResp, error) {
 	if err != nil {
 		return bencodeTrackerResp{}, err
 	}
-	trackerResp := bencodeTrackerResp{}
-	err = bencode2.Unmarshal(get.Body, &trackerResp)
+	bytes, err := ioutil.ReadAll(get.Body)
 	if err != nil {
 		return bencodeTrackerResp{}, err
+	}
+	trackerResp, err := parseTrackerResp(bytes)
+	if err != nil {
+		return bencodeTrackerResp{}, fmt.Errorf("error in decode url response: %v", err)
 	}
 	return trackerResp, nil
 }
 
-func parsePeers(bytes []byte) []peer {
+func parsePeers(str string) []peer {
+	bytes := []byte(str)
 	const numberPeerBytes = 6
 	var peers []peer
 	for i := 0; i < len(bytes); i += numberPeerBytes {
@@ -152,6 +208,22 @@ func parsePeers(bytes []byte) []peer {
 		peers = append(peers, p)
 	}
 	return peers
+}
+
+func (h handshake) String() []byte {
+	toDecode := make([]byte, len(h.pstr)+29+len(h.peerId))
+	copy(toDecode[:], h.pstr)
+	copy(toDecode[len(h.pstr)+9:], h.infoHash[:])
+	copy(toDecode[len(h.pstr)+29:], h.peerId[:])
+	_, err := bencode.EncodeBytes(toDecode)
+	if err != nil {
+		return nil
+	}
+	return toDecode
+}
+
+func downloadPeers(peers []peer) {
+
 }
 
 func main() {
@@ -167,7 +239,21 @@ func main() {
 		return
 	}
 	//fmt.Println([]byte(tracker.Peers))
-	peers := parsePeers([]byte(tracker.Peers))
-	fmt.Println(peers)
+	//peers := parsePeers([]byte(tracker.Peers))
+	conn, err := net.Dial("tcp", tracker.Peers[1].String())
+	defer conn.Close()
+	if err != nil {
+		return
+	}
+	h := handshake{
+		pstr:     "BitTorrent protocol",
+		infoHash: torrent.infoHash,
+		peerId:   torrent.infoHash,
+	}
+	read, err := conn.Write(h.String())
+	if err != nil {
+		return
+	}
+	fmt.Println(read)
 
 }
