@@ -7,6 +7,7 @@ import (
 	"github.com/zeebo/bencode"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,7 +20,7 @@ import (
 type handshake struct {
 	pstr     string
 	infoHash []byte
-	peerId   []byte
+	peerId   [20]byte
 }
 
 type peer struct {
@@ -175,7 +176,7 @@ func infoHash(decodedInfoMap interface{}) ([]byte, error) {
 }
 
 func (torrent *TorrentInfo) getTrackerResp() (bencodeTrackerResp, error) {
-	trackerUrl, err := torrent.buildTrackerUrl(torrent.infoHash, 6969)
+	trackerUrl, err := torrent.buildTrackerUrl(torrent.infoHash, 6881)
 	if err != nil {
 		return bencodeTrackerResp{}, err
 	}
@@ -210,16 +211,43 @@ func parsePeers(str string) []peer {
 	return peers
 }
 
-func (h handshake) String() []byte {
-	toDecode := make([]byte, len(h.pstr)+29+len(h.peerId))
-	copy(toDecode[:], h.pstr)
-	copy(toDecode[len(h.pstr)+9:], h.infoHash[:])
-	copy(toDecode[len(h.pstr)+29:], h.peerId[:])
-	_, err := bencode.EncodeBytes(toDecode)
+func (h handshake) toByte() []byte {
+	pstrLen := len(h.pstr)
+	buf := make([]byte, 49+pstrLen)
+	buf[0] = byte(pstrLen)
+
+	idxCurr := 1
+	idxCurr += copy(buf[idxCurr:], h.pstr)
+	idxCurr += copy(buf[idxCurr:], make([]byte, 8)) // Leave 8 reserved bytes
+	idxCurr += copy(buf[idxCurr:], h.infoHash[:])
+	idxCurr += copy(buf[idxCurr:], h.peerId[:])
+
+	//	fmt.Println(buf)
+	return buf
+}
+
+func readHandshake(r io.Reader) (handshake, error) {
+	pstrlenBuf := make([]byte, 1)
+	a, err := io.ReadFull(r, pstrlenBuf)
 	if err != nil {
-		return nil
+		return handshake{}, err
 	}
-	return toDecode
+	fmt.Println(a)
+	pstrlen := int(pstrlenBuf[0])
+	restBuf := make([]byte, (pstrlen)+48)
+	_, err = io.ReadFull(r, restBuf)
+	if err != nil {
+		return handshake{}, err
+	}
+	infoHash := restBuf[(pstrlen)+8 : (pstrlen)+28]
+	var peerId [20]byte
+	copy(peerId[:], restBuf[(pstrlen)+28:])
+	h := handshake{
+		pstr:     string(restBuf[0:(pstrlen)]),
+		infoHash: infoHash,
+		peerId:   peerId,
+	}
+	return h, err
 }
 
 func downloadPeers(peers []peer) {
@@ -240,20 +268,35 @@ func main() {
 	}
 	//fmt.Println([]byte(tracker.Peers))
 	//peers := parsePeers([]byte(tracker.Peers))
-	conn, err := net.Dial("tcp", tracker.Peers[1].String())
-	defer conn.Close()
+
+	conn, err := net.DialTimeout("tcp", tracker.Peers[0].String(), time.Second*6)
+	fmt.Println(tracker.Peers[0])
 	if err != nil {
 		return
 	}
-	h := handshake{
+	fmt.Println(len(tracker.Peers))
+	//conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	//defer conn.Close()
+	//r := bufio.NewReader(conn)
+
+	var peerId [20]byte
+	rand.Read(peerId[:])
+	h := &handshake{
 		pstr:     "BitTorrent protocol",
 		infoHash: torrent.infoHash,
-		peerId:   torrent.infoHash,
+		peerId:   peerId,
 	}
-	read, err := conn.Write(h.String())
+
+	conn.Write(h.toByte())
 	if err != nil {
 		return
 	}
-	fmt.Println(read)
+	fmt.Println(h.infoHash)
+	h2, err := readHandshake(conn)
+	if err != nil {
+		return
+	}
+	//	fmt.Println(r.Buffered())
+	fmt.Println(string(h2.infoHash))
 
 }
